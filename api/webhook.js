@@ -1,9 +1,9 @@
 const axios = require('axios');
 
-const VIP_API_ID = 'hA3ZxRSJ';
-const VIP_API_KEY = 'e6f8406cdf5a736115262d820f0d3229';
-const FIREBASE_PROJECT = 'faib-store';
-const FIREBASE_API_KEY = 'AIzaSyABNf9TnKaY-e6QrIPWMZsUhjRX0xyLjB4';
+const VIP_API_ID = process.env.VIP_API_ID;
+const VIP_API_KEY = process.env.VIP_API_KEY;
+const FIREBASE_PROJECT = process.env.FIREBASE_PROJECT;
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
