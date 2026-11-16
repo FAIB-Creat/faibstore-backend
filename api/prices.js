@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const axios = require('axios');
 
 module.exports = async (req, res) => {
-  // Tambahkan Header CORS agar diizinkan oleh browser frontend
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -21,12 +20,14 @@ module.exports = async (req, res) => {
 
     const sign = crypto.createHash('md5').update(apiId + apiKey).digest('hex');
 
-    const response = await axios.post('https://vip-reseller.co.id/api/game-feature', {
-      key: apiKey,
-      sign: sign,
-      type: 'services'
-    }, {
-      headers: { 'Content-Type': 'application/json' }
+    // Menggunakan URLSearchParams agar terbaca sebagai form-urlencoded yang diminta VIP Reseller
+    const params = new URLSearchParams();
+    params.append('key', apiKey);
+    params.append('sign', sign);
+    params.append('type', 'services');
+
+    const response = await axios.post('https://vip-reseller.co.id/api/game-feature', params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
     return res.status(200).json(response.data);
