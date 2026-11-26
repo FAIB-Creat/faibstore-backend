@@ -4,8 +4,46 @@ import crypto from 'crypto';
 const SUPABASE_URL = 'https://srlkktnhonecypxzudgo.supabase.co';
 const VAULT_PEPPER = 'FAIB-STORE-AES256-VAULT-2026';
 
+// Dekripsi format baru RSA256:<encryptedAesKeyB64>:<ivB64>:<cipherAndTagB64>
+function decryptRsaHybrid(encryptedStr) {
+  const rawPem = process.env.RSA_PRIVATE_KEY;
+  if (!rawPem) {
+    throw new Error('RSA_PRIVATE_KEY belum diset di Environment Variables Vercel!');
+  }
+
+  // Normalisasi newline jika tersimpan sebagai \n satu baris di Vercel
+  const privateKey = rawPem.replace(/\\n/g, '\n');
+
+  const parts = String(encryptedStr).split(':');
+  if (parts.length !== 4) {
+    throw new Error('Format RSA256 tidak valid');
+  }
+
+  const [, encKeyB64, ivB64, cipherB64] = parts;
+
+  // 1. Buka AES-256 key menggunakan RSA-OAEP SHA-256 Private Key
+  const aesKey = crypto.privateDecrypt(
+    {
+      key: privateKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: 'sha256',
+    },
+    Buffer.from(encKeyB64, 'base64')
+  );
+
+  // 2. Dekripsi payload menggunakan AES-256-GCM
+  const iv = Buffer.from(ivB64, 'base64');
+  const data = Buffer.from(cipherB64, 'base64');
+  const authTag = data.subarray(data.length - 16);
+  const ciphertext = data.subarray(0, data.length - 16);
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+// Dekripsi format lama ENC:<ivB64>:<cipherAndTagB64>
 function decryptLegacyVault(encryptedStr) {
-  if (!encryptedStr || !String(encryptedStr).startsWith('ENC:')) return encryptedStr;
   const [, ivB64, cipherB64] = String(encryptedStr).split(':');
   const key = crypto.pbkdf2Sync(VAULT_PEPPER, 'faib_vault_salt_v1', 100000, 32, 'sha256');
   const iv = Buffer.from(ivB64, 'base64');
@@ -16,6 +54,14 @@ function decryptLegacyVault(encryptedStr) {
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+function decryptCredential(str) {
+  if (!str) return '';
+  const s = String(str);
+  if (s.startsWith('RSA256:')) return decryptRsaHybrid(s);
+  if (s.startsWith('ENC:')) return decryptLegacyVault(s);
+  return s;
 }
 
 export default async function handler(req, res) {
@@ -55,7 +101,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true });
     }
 
-    // 1. Cek di tabel terisolasi joki_credentials
     const credRes = await fetch(
       `${SUPABASE_URL}/rest/v1/joki_credentials?order_invoice=eq.${encodeURIComponent(invoice)}&select=*`,
       { headers: sbHeaders }
@@ -66,14 +111,13 @@ export default async function handler(req, res) {
       const cred = credRows[0];
       return res.status(200).json({
         loginVia: cred.login_via,
-        loginId: decryptLegacyVault(cred.encrypted_email),
-        password: decryptLegacyVault(cred.encrypted_password),
+        loginId: decryptCredential(cred.encrypted_email),
+        password: decryptCredential(cred.encrypted_password),
         nickname: cred.nickname,
         note: cred.notes,
       });
     }
 
-    // 2. Fallback untuk pesanan lama di store_orders
     const oldRes = await fetch(
       `${SUPABASE_URL}/rest/v1/store_orders?invoice=eq.${encodeURIComponent(invoice)}&select=payload`,
       { headers: sbHeaders }
@@ -88,8 +132,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       loginVia: c.loginVia,
-      loginId: decryptLegacyVault(c.loginId),
-      password: decryptLegacyVault(c.password),
+      loginId: decryptCredential(c.loginId),
+      password: decryptCredential(c.password),
       nickname: oldPayload.targetAccount,
       note: c.note,
     });
