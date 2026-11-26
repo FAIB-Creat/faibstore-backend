@@ -1,5 +1,5 @@
-import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
+const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://srlkktnhonecypxzudgo.supabase.co';
 const SUPABASE_SERVICE_KEY =
@@ -12,10 +12,6 @@ const VAULT_PEPPER = process.env.VAULT_PEPPER || 'FAIB-STORE-AES256-VAULT-2026';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-/**
- * Normalisasi Private Key PEM dari Environment Variable Vercel
- * agar tidak memicu error OpenSSL 3: DECODER routines::unsupported
- */
 function getNormalizedPrivateKey() {
   let raw = process.env.VAULT_PRIVATE_KEY || '';
   raw = raw.replace(/^["']|["']$/g, '').replace(/\\n/g, '\n').trim();
@@ -33,9 +29,6 @@ function getNormalizedPrivateKey() {
   });
 }
 
-/**
- * Dekripsi field kredensial berformat RSA256:... atau ENC:... (legacy)
- */
 function decryptCredentialField(cipherStr, privateKeyObj) {
   if (!cipherStr || typeof cipherStr !== 'string') return '';
 
@@ -54,7 +47,6 @@ function decryptCredentialField(cipherStr, privateKeyObj) {
     const ivBuf = Buffer.from(parts[2], 'base64');
     const cipherWithTagBuf = Buffer.from(parts[3], 'base64');
 
-    // Buka kunci sesi AES-256 menggunakan Private Key RSA-OAEP SHA-256
     const rawAesKey = crypto.privateDecrypt(
       {
         key: privateKeyObj,
@@ -64,7 +56,6 @@ function decryptCredentialField(cipherStr, privateKeyObj) {
       wrappedAesBuf
     );
 
-    // WebCrypto AES-GCM menempelkan 16-byte authTag di akhir ciphertext
     const authTag = cipherWithTagBuf.subarray(cipherWithTagBuf.length - 16);
     const encryptedData = cipherWithTagBuf.subarray(0, cipherWithTagBuf.length - 16);
 
@@ -103,12 +94,10 @@ function decryptCredentialField(cipherStr, privateKeyObj) {
     return decrypted.toString('utf8');
   }
 
-  // Plaintext fallback
   return cipherStr;
 }
 
-export default async function handler(req, res) {
-  // CORS Headers
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-owner-pin');
@@ -134,7 +123,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Nomor invoice wajib diisi.' });
     }
 
-    // Ambil pesanan dari Supabase
     const { data: row, error: fetchErr } = await supabase
       .from('store_orders')
       .select('invoice, payload')
@@ -151,7 +139,6 @@ export default async function handler(req, res) {
 
     const orderPayload = row.payload;
 
-    // Aksi pemusnahan permanen data akun joki
     if (action === 'wipe') {
       const wipedPayload = {
         ...orderPayload,
@@ -179,7 +166,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Validasi ketersediaan kredensial
     const creds = orderPayload.credentials;
     if (!creds) {
       return res.status(404).json({ error: 'Pesanan ini tidak memiliki data login (Joki Gendong / Top-Up).' });
@@ -215,4 +201,4 @@ export default async function handler(req, res) {
       error: err?.message || 'Gagal mendekripsi data akun joki.',
     });
   }
-}
+};
