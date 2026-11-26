@@ -1,18 +1,12 @@
-// api/joki-decrypt.js (Repo faibstore-backend)
-import { createClient } from '@supabase/supabase-js';
+// api/joki-decrypt.js
 import crypto from 'crypto';
 
-const supabaseAdmin = createClient(
-  'https://srlkktnhonecypxzudgo.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
+const SUPABASE_URL = 'https://srlkktnhonecypxzudgo.supabase.co';
 const VAULT_PEPPER = 'FAIB-STORE-AES256-VAULT-2026';
 
-// Dekripsi format ENC:iv:cipher dari index.html
 function decryptLegacyVault(encryptedStr) {
-  if (!encryptedStr || !encryptedStr.startsWith('ENC:')) return encryptedStr;
-  const [, ivB64, cipherB64] = encryptedStr.split(':');
+  if (!encryptedStr || !String(encryptedStr).startsWith('ENC:')) return encryptedStr;
+  const [, ivB64, cipherB64] = String(encryptedStr).split(':');
   const key = crypto.pbkdf2Sync(VAULT_PEPPER, 'faib_vault_salt_v1', 100000, 32, 'sha256');
   const iv = Buffer.from(ivB64, 'base64');
   const data = Buffer.from(cipherB64, 'base64');
@@ -28,10 +22,15 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-owner-pin');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Validasi PIN Owner di server
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) {
+    return res.status(500).json({ error: 'SUPABASE_SERVICE_ROLE_KEY belum diset di Vercel!' });
+  }
+
   const pin = req.headers['x-owner-pin'];
   const validPin = process.env.OWNER_ADMIN_PIN || '123456';
   if (!pin || pin !== validPin) {
@@ -41,44 +40,60 @@ export default async function handler(req, res) {
   const { invoice, action } = req.body || {};
   if (!invoice) return res.status(400).json({ error: 'Invoice wajib diisi' });
 
-  // Aksi hapus permanen kredensial setelah joki selesai
-  if (action === 'wipe') {
-    await supabaseAdmin.from('joki_credentials').delete().eq('order_invoice', invoice);
-    return res.status(200).json({ success: true });
-  }
+  const sbHeaders = {
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+    'Content-Type': 'application/json',
+  };
 
-  // 1. Cek di tabel terisolasi joki_credentials
-  const { data: cred } = await supabaseAdmin
-    .from('joki_credentials')
-    .select('*')
-    .eq('order_invoice', invoice)
-    .maybeSingle();
+  try {
+    if (action === 'wipe') {
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/joki_credentials?order_invoice=eq.${encodeURIComponent(invoice)}`,
+        { method: 'DELETE', headers: sbHeaders }
+      );
+      return res.status(200).json({ success: true });
+    }
 
-  if (cred) {
+    // 1. Cek di tabel terisolasi joki_credentials
+    const credRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/joki_credentials?order_invoice=eq.${encodeURIComponent(invoice)}&select=*`,
+      { headers: sbHeaders }
+    );
+    const credRows = await credRes.json();
+
+    if (Array.isArray(credRows) && credRows.length > 0) {
+      const cred = credRows[0];
+      return res.status(200).json({
+        loginVia: cred.login_via,
+        loginId: decryptLegacyVault(cred.encrypted_email),
+        password: decryptLegacyVault(cred.encrypted_password),
+        nickname: cred.nickname,
+        note: cred.notes,
+      });
+    }
+
+    // 2. Fallback untuk pesanan lama di store_orders
+    const oldRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/store_orders?invoice=eq.${encodeURIComponent(invoice)}&select=payload`,
+      { headers: sbHeaders }
+    );
+    const oldRows = await oldRes.json();
+    const oldPayload = Array.isArray(oldRows) && oldRows[0]?.payload;
+    const c = oldPayload?.credentials;
+
+    if (!c) {
+      return res.status(404).json({ error: 'Data kredensial joki tidak ditemukan di database' });
+    }
+
     return res.status(200).json({
-      loginVia: cred.login_via,
-      loginId: decryptLegacyVault(cred.encrypted_email),
-      password: decryptLegacyVault(cred.encrypted_password),
-      nickname: cred.nickname,
-      note: cred.notes,
+      loginVia: c.loginVia,
+      loginId: decryptLegacyVault(c.loginId),
+      password: decryptLegacyVault(c.password),
+      nickname: oldPayload.targetAccount,
+      note: c.note,
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-
-  // 2. Fallback untuk pesanan lama (seperti FAIB-3TQ4KF) yang masih di store_orders
-  const { data: oldOrder } = await supabaseAdmin
-    .from('store_orders')
-    .select('payload')
-    .eq('invoice', invoice)
-    .maybeSingle();
-
-  const c = oldOrder?.payload?.credentials;
-  if (!c) return res.status(404).json({ error: 'Data kredensial joki tidak ditemukan' });
-
-  return res.status(200).json({
-    loginVia: c.loginVia,
-    loginId: decryptLegacyVault(c.loginId),
-    password: decryptLegacyVault(c.password),
-    nickname: oldOrder.payload.targetAccount,
-    note: c.note,
-  });
 }
