@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://srlkktnhonecypxzudgo.supabase.co';
 const SUPABASE_SERVICE_KEY =
@@ -94,7 +94,7 @@ function decryptCredentialField(cipherStr, privateKeyObj) {
   return cipherStr;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-owner-pin');
@@ -120,7 +120,6 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Nomor invoice wajib diisi.' });
     }
 
-    // Ambil pesanan via Supabase REST API (tanpa package eksternal)
     const getUrl = `${SUPABASE_URL}/rest/v1/store_orders?invoice=eq.${encodeURIComponent(cleanInvoice)}&select=invoice,payload&limit=1`;
     const dbRes = await fetch(getUrl, {
       method: 'GET',
@@ -145,7 +144,6 @@ module.exports = async function handler(req, res) {
 
     const orderPayload = row.payload;
 
-    // Aksi pemusnahan permanen data akun joki
     if (action === 'wipe') {
       const wipedPayload = {
         ...orderPayload,
@@ -216,4 +214,4 @@ module.exports = async function handler(req, res) {
       error: err?.message || 'Gagal mendekripsi data akun joki.',
     });
   }
-};
+}
