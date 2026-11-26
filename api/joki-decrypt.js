@@ -6,7 +6,7 @@ const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_KEY ||
   'sb_publishable_bM1VKoWBW-qpNnqVS-MjkQ_iQwwi2YT';
 
-const OWNER_PIN = process.env.OWNER_PIN || '123456';
+const OWNER_PIN = process.env.OWNER_PIN || '020108';
 const VAULT_PEPPER = process.env.VAULT_PEPPER || 'FAIB-STORE-AES256-VAULT-2026';
 
 function getNormalizedPrivateKey() {
