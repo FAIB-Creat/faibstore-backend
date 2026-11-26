@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://srlkktnhonecypxzudgo.supabase.co';
 const SUPABASE_SERVICE_KEY =
@@ -9,8 +8,6 @@ const SUPABASE_SERVICE_KEY =
 
 const OWNER_PIN = process.env.OWNER_PIN || '123456';
 const VAULT_PEPPER = process.env.VAULT_PEPPER || 'FAIB-STORE-AES256-VAULT-2026';
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 function getNormalizedPrivateKey() {
   let raw = process.env.VAULT_PRIVATE_KEY || '';
@@ -123,15 +120,24 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Nomor invoice wajib diisi.' });
     }
 
-    const { data: row, error: fetchErr } = await supabase
-      .from('store_orders')
-      .select('invoice, payload')
-      .eq('invoice', cleanInvoice)
-      .maybeSingle();
+    // Ambil pesanan via Supabase REST API (tanpa package eksternal)
+    const getUrl = `${SUPABASE_URL}/rest/v1/store_orders?invoice=eq.${encodeURIComponent(cleanInvoice)}&select=invoice,payload&limit=1`;
+    const dbRes = await fetch(getUrl, {
+      method: 'GET',
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
 
-    if (fetchErr) {
-      return res.status(500).json({ error: `Database error: ${fetchErr.message}` });
+    if (!dbRes.ok) {
+      const errTxt = await dbRes.text();
+      return res.status(500).json({ error: `Database error (${dbRes.status}): ${errTxt}` });
     }
+
+    const rows = await dbRes.json();
+    const row = Array.isArray(rows) ? rows[0] : null;
 
     if (!row || !row.payload) {
       return res.status(404).json({ error: `Invoice ${cleanInvoice} tidak ditemukan.` });
@@ -139,6 +145,7 @@ module.exports = async function handler(req, res) {
 
     const orderPayload = row.payload;
 
+    // Aksi pemusnahan permanen data akun joki
     if (action === 'wipe') {
       const wipedPayload = {
         ...orderPayload,
@@ -148,16 +155,24 @@ module.exports = async function handler(req, res) {
         },
       };
 
-      const { error: updateErr } = await supabase
-        .from('store_orders')
-        .update({
+      const patchUrl = `${SUPABASE_URL}/rest/v1/store_orders?invoice=eq.${encodeURIComponent(cleanInvoice)}`;
+      const patchRes = await fetch(patchUrl, {
+        method: 'PATCH',
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
           payload: wipedPayload,
           updated_at: new Date().toISOString(),
-        })
-        .eq('invoice', cleanInvoice);
+        }),
+      });
 
-      if (updateErr) {
-        return res.status(500).json({ error: `Gagal memusnahkan data: ${updateErr.message}` });
+      if (!patchRes.ok) {
+        const errTxt = await patchRes.text();
+        return res.status(500).json({ error: `Gagal memusnahkan data: ${errTxt}` });
       }
 
       return res.status(200).json({
